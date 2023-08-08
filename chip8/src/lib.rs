@@ -86,7 +86,7 @@ pub struct Chip8<R: RngCore> {
     dt: u8,                                     // Delay Timer
     st: u8,                                     // Sound Timer
     keypad: u16,                                // Keypad
-    fb: [u8; SCREEN_WIDTH * SCREEN_HEIGTH / 8], // Framebuffer
+    fb: [u8; SCREEN_WIDTH * SCREEN_HEIGTH * 4 / 8], // Framebuffer
     tone: bool,                                 // Tone output enable
     time: isize,                                // Overtime in microseconds
     rng: R,                                     // Instance of a random number generator
@@ -120,7 +120,7 @@ impl Chip8<SmallRng> {
             dt: 0,
             st: 0,
             keypad: 0,
-            fb: [0; SCREEN_WIDTH * SCREEN_HEIGTH / 8],
+            fb: [0; SCREEN_WIDTH * SCREEN_HEIGTH * 4 / 8],
             tone: false,
             time: 0,
             rng: rand::rngs::SmallRng::seed_from_u64(seed),
@@ -142,7 +142,7 @@ impl<R: RngCore> Chip8<R> {
         self.tone
     }
     /// Framebuffer view
-    pub fn fb(&self) -> [u8; SCREEN_WIDTH * SCREEN_HEIGTH / 8] {
+    pub fn fb(&self) -> [u8; SCREEN_WIDTH * SCREEN_HEIGTH * 4 / 8] {
         self.fb
     }
     /// Emulates the execution of instructions continuously until the emulated instructions total
@@ -368,22 +368,47 @@ impl<R: RngCore> Chip8<R> {
         let pos_y = pos_y % 32;
         let fb = &mut self.fb;
         let shift = pos_x % 8;
-        let col_a = pos_x as usize / 8;
-        let col_b = (col_a + 1) % (SCREEN_WIDTH / 8);
+        let col_a = pos_x as usize / 8 * 2;
+        let col_b = (col_a + 1) % (SCREEN_WIDTH / 8 * 2);
+        let col_c = (col_b + 1) % (SCREEN_WIDTH / 8 * 2);
+        let col_d = (col_c + 1) % (SCREEN_WIDTH / 8 * 2);
         let mut collision = 0;
         for i in 0..(n as usize) {
             let byte = self.mem[self.i as usize + i];
             let y = (pos_y as usize + i) % SCREEN_HEIGTH;
-            let a = byte >> shift;
-            let fb_a = &mut fb[y * SCREEN_WIDTH / 8 + col_a];
+            let byte1 = (byte & 0x80) + ((byte & 0x40) >> 1) + ((byte & 0x20) >> 2) + ((byte & 0x10) >> 3);
+            let byte1 = byte1 + (byte1 >> 1);
+            let byte2 = ((byte & 0x08) << 4) + ((byte & 0x04) << 3) + ((byte & 0x02) << 2) + ((byte & 0x01) << 1);
+            let byte2 = byte2 + (byte2 >> 1);
+            let word = ((byte1 as u32) << 24) + ((byte2 as u32) << 16);
+
+            let a = (((word >> (shift * 2)) & 0xff_00_00_00) >> 24) as u8;
+            let fb_a = &mut fb[(2 * y) * SCREEN_WIDTH / 4 + col_a];
             collision |= *fb_a & a;
             *fb_a ^= a;
-            if shift != 0 {
-                let b = byte << (8 - shift);
-                let fb_b = &mut fb[y * SCREEN_WIDTH / 8 + col_b];
-                collision |= *fb_b & b;
-                *fb_b ^= b;
-            }
+            let fb_a = &mut fb[(2 * y + 1) * SCREEN_WIDTH / 4 + col_a];
+            *fb_a ^= a;
+
+            let b = (((word >> (shift * 2)) & 0x00_ff_00_00) >> 16) as u8;
+            let fb_b = &mut fb[(2 * y) * SCREEN_WIDTH / 4 + col_b];
+            collision |= *fb_b & b;
+            *fb_b ^= b;
+            let fb_b = &mut fb[(2 * y + 1) * SCREEN_WIDTH / 4 + col_b];
+            *fb_b ^= b;
+
+            let c = (((word >> (shift * 2)) & 0x00_00_ff_00) >> 8) as u8;
+            let fb_c = &mut fb[(2 * y) * SCREEN_WIDTH / 4 + col_c];
+            collision |= *fb_c & c;
+            *fb_c ^= c;
+            let fb_c = &mut fb[(2 * y + 1) * SCREEN_WIDTH / 4 + col_c];
+            *fb_c ^= c;
+
+            let d = ((word >> (shift * 2)) & 0x00_00_00_ff) as u8;
+            let fb_d = &mut fb[(2 * y) * SCREEN_WIDTH / 4 + col_d];
+            collision |= *fb_d & d;
+            *fb_d ^= d;
+            let fb_d = &mut fb[(2 * y + 1) * SCREEN_WIDTH / 4 + col_d];
+            *fb_d ^= d;
         }
         self.v[Reg(0xf)] = if collision != 0 { 1 } else { 0 };
         self.pc += 2;
